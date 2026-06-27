@@ -15,7 +15,7 @@ To strictly comply with the double-blind review policy and protect core intellec
 ## Overview 🔍
 
 <p align="center">
-  <img src="asserts\model2.pdf" width="80%">
+  <img src="asserts\model.png" width="80%">
 </p>
 
 **Figure 1. The framework of the proposed SD-UNet.**
