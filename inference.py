@@ -5,9 +5,7 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
-# ==========================================
-# 🚨 直接导入黑盒编译文件 (.pyc)
-# ==========================================
+
 from models.Net import DGL_UNet
 
 def parse_args():
@@ -35,22 +33,20 @@ def preprocess_image(image_path, img_size):
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
     img = cv2.resize(img, (img_size, img_size))
     
-    # 🌟 严格复刻训练时的 Normalize 逻辑
+    
     mean = 159.922
     std = 25.748
     
-    # 第一步：减均值除标准差
+  
     img_normalized = (img - mean) / std
     
-    # 第二步：Min-Max 缩放到 0-255
-    # 注意：这里要对全图做 min 和 max
+   
     img_min = np.min(img_normalized)
     img_max = np.max(img_normalized)
     
-    # 加上 eps 防止除零
     img_normalized = ((img_normalized - img_min) / (img_max - img_min + 1e-8)) * 255.0
     
-    # 维度转换 HWC -> CHW (注意：这里已经是 0-255 的 float32 了)
+   
     img = np.transpose(img_normalized, (2, 0, 1))
     
     return torch.from_numpy(img).unsqueeze(0)
@@ -65,11 +61,11 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"[*] Running inference on device: {device}")
     
-    # 1. 初始化模型架构
+   
     print("[*] Initializing DGL-UNet architecture...")
     model = DGL_UNet(out_channels=[64, 128, 256, 384, 512])
     
-    # 2. 加载纯净权重
+   
     print(f"[*] Loading pre-trained weights from {args.weight_path}...")
     if not os.path.exists(args.weight_path):
         raise FileNotFoundError(f"❌ Cannot find weights file: {args.weight_path}")
@@ -78,7 +74,7 @@ def main():
     model = model.to(device)
     model.eval()
     
-    # 3. 准备数据
+   
     img_names = [f for f in os.listdir(args.input_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
     if len(img_names) == 0:
         print(f"❌ No images found in {args.input_dir}")
@@ -87,7 +83,7 @@ def main():
     total_iou, total_dice = 0.0, 0.0
     eval_count = 0
     
-    # 4. 开始推理
+  
     print("[*] Starting inference and evaluation...")
     with torch.no_grad():
         for img_name in tqdm(img_names, desc="Processing"):
@@ -96,27 +92,23 @@ def main():
             
             input_tensor = preprocess_image(img_path, args.img_size).to(device)
             
-            # 前向传播
+           
             output = model(input_tensor)
             
-            # 兼容深监督机制：如果输出是列表或元组，提取主输出
+          
             if isinstance(output, (list, tuple)):
                 output = output[0]  # 💡 如果出图不对，可以尝试改成 output[-1]
             
-            # ==========================================================
-            # 🌟 核心修复：因为网络内部已有 Sigmoid，此处直接 squeeze 并转为 numpy
-            # ==========================================================
+          
             prob = output.squeeze().cpu().numpy()
             
-            # 二值化判定 (大于 0.5 变为 255 纯白，其余为 0 纯黑)
-            pred_mask = (prob > 0.5).astype(np.uint8) * 255
-            # ==========================================================
             
-            # 保存预测结果
+            pred_mask = (prob > 0.5).astype(np.uint8) * 255
+           
             save_path = os.path.join(args.output_dir, img_name)
             cv2.imwrite(save_path, pred_mask)
             
-            # 指标计算
+            
             if os.path.exists(gt_path):
                 gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
                 if gt_mask is not None:
