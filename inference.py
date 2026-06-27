@@ -1,3 +1,4 @@
+from models.Net import DGL_UNet as SD_UNet
 import os
 import argparse
 import torch
@@ -6,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 
-from models.Net import DGL_UNet
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Inference Demo for DGL-UNet (Anonymous Submission)")
@@ -63,7 +64,7 @@ def main():
     
    
     print("[*] Initializing DGL-UNet architecture...")
-    model = DGL_UNet(out_channels=[64, 128, 256, 384, 512])
+    model = SD_UNet(out_channels=[64, 128, 256, 384, 512])
     
    
     print(f"[*] Loading pre-trained weights from {args.weight_path}...")
