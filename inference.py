@@ -1,45 +1,141 @@
 import os
+import argparse
 import torch
 import cv2
 import numpy as np
-import argparse
 from tqdm import tqdm
 
-def preprocess(image_path, size=256):
+# ==========================================
+# 🚨 直接导入黑盒编译文件 (.pyc)
+# ==========================================
+from models.Net import DGL_UNet
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Inference Demo for DGL-UNet (Anonymous Submission)")
+    parser.add_argument('--weight_path', type=str, default='clean_best_weights.pth', help='Path to the cleaned model weights')
+    parser.add_argument('--input_dir', type=str, default='./sample_data/images', help='Directory containing testing images')
+    parser.add_argument('--gt_dir', type=str, default='./sample_data/masks', help='Directory containing ground truth masks')
+    parser.add_argument('--output_dir', type=str, default='./sample_data/predictions', help='Directory to save predictions')
+    parser.add_argument('--img_size', type=int, default=256, help='Input image size')
+    return parser.parse_args()
+
+def calculate_iou_dice(pred, target):
+    pred_bin = (pred > 0).astype(np.uint8)
+    target_bin = (target > 0).astype(np.uint8)
+    intersection = np.logical_and(pred_bin, target_bin).sum()
+    union = np.logical_or(pred_bin, target_bin).sum()
+    iou = intersection / (union + 1e-6)
+    dice = (2. * intersection) / (pred_bin.sum() + target_bin.sum() + 1e-6)
+    return iou, dice
+
+def preprocess_image(image_path, img_size):
     img = cv2.imread(image_path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (size, size))
-    # ⚠️【关键】这里必须与你原训练代码的归一化完全一致
-    # 如果你原代码是用 img / 255.0，这里也要保持一致
-    img = img.astype(np.float32) / 255.0
-    img = img.transpose(2, 0, 1) # HWC -> CHW
+    if img is None:
+        raise FileNotFoundError(f"Cannot read image: {image_path}")
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
+    img = cv2.resize(img, (img_size, img_size))
+    
+    # 🌟 严格复刻训练时的 Normalize 逻辑
+    mean = 159.922
+    std = 25.748
+    
+    # 第一步：减均值除标准差
+    img_normalized = (img - mean) / std
+    
+    # 第二步：Min-Max 缩放到 0-255
+    # 注意：这里要对全图做 min 和 max
+    img_min = np.min(img_normalized)
+    img_max = np.max(img_normalized)
+    
+    # 加上 eps 防止除零
+    img_normalized = ((img_normalized - img_min) / (img_max - img_min + 1e-8)) * 255.0
+    
+    # 维度转换 HWC -> CHW (注意：这里已经是 0-255 的 float32 了)
+    img = np.transpose(img_normalized, (2, 0, 1))
+    
     return torch.from_numpy(img).unsqueeze(0)
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--input_dir', type=str, default='./sample_data/images')
-    parser.add_argument('--output_dir', type=str, default='./sample_data/predictions')
-    args = parser.parse_args()
+    print("="*60)
+    print("🚀 DGL-UNet Anonymous Inference Demo")
+    print("="*60)
     
+    args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"[*] Running inference on device: {device}")
     
-    # 仅加载固化后的模型
-    model = torch.jit.load("dgl_unet_weights.pt", map_location=device)
+    # 1. 初始化模型架构
+    print("[*] Initializing DGL-UNet architecture...")
+    model = DGL_UNet(out_channels=[64, 128, 256, 384, 512])
+    
+    # 2. 加载纯净权重
+    print(f"[*] Loading pre-trained weights from {args.weight_path}...")
+    if not os.path.exists(args.weight_path):
+        raise FileNotFoundError(f"❌ Cannot find weights file: {args.weight_path}")
+        
+    model.load_state_dict(torch.load(args.weight_path, map_location='cpu'))
+    model = model.to(device)
     model.eval()
     
-    img_files = [f for f in os.listdir(args.input_dir) if f.endswith(('.png', '.jpg'))]
+    # 3. 准备数据
+    img_names = [f for f in os.listdir(args.input_dir) if f.endswith(('.png', '.jpg', '.jpeg'))]
+    if len(img_names) == 0:
+        print(f"❌ No images found in {args.input_dir}")
+        return
+        
+    total_iou, total_dice = 0.0, 0.0
+    eval_count = 0
     
+    # 4. 开始推理
+    print("[*] Starting inference and evaluation...")
     with torch.no_grad():
-        for f in tqdm(img_files):
-            input_tensor = preprocess(os.path.join(args.input_dir, f)).to(device)
+        for img_name in tqdm(img_names, desc="Processing"):
+            img_path = os.path.join(args.input_dir, img_name)
+            gt_path = os.path.join(args.gt_dir, img_name) 
+            
+            input_tensor = preprocess_image(img_path, args.img_size).to(device)
+            
+            # 前向传播
             output = model(input_tensor)
             
-            # 后处理：假设输出是 logit，过sigmoid后二值化
-            prob = torch.sigmoid(output).squeeze().cpu().numpy()
-            pred = (prob > 0.5).astype(np.uint8) * 255
+            # 兼容深监督机制：如果输出是列表或元组，提取主输出
+            if isinstance(output, (list, tuple)):
+                output = output[0]  # 💡 如果出图不对，可以尝试改成 output[-1]
             
-            cv2.imwrite(os.path.join(args.output_dir, f), pred)
+            # ==========================================================
+            # 🌟 核心修复：因为网络内部已有 Sigmoid，此处直接 squeeze 并转为 numpy
+            # ==========================================================
+            prob = output.squeeze().cpu().numpy()
+            
+            # 二值化判定 (大于 0.5 变为 255 纯白，其余为 0 纯黑)
+            pred_mask = (prob > 0.5).astype(np.uint8) * 255
+            # ==========================================================
+            
+            # 保存预测结果
+            save_path = os.path.join(args.output_dir, img_name)
+            cv2.imwrite(save_path, pred_mask)
+            
+            # 指标计算
+            if os.path.exists(gt_path):
+                gt_mask = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
+                if gt_mask is not None:
+                    gt_mask = cv2.resize(gt_mask, (args.img_size, args.img_size))
+                    gt_mask = (gt_mask > 127).astype(np.uint8) # 保证GT也是二值化的
+                    
+                    iou, dice = calculate_iou_dice(pred_mask, gt_mask)
+                    total_iou += iou
+                    total_dice += dice
+                    eval_count += 1
+                
+    if eval_count > 0:
+        print("\n" + "="*60)
+        print("📊 Evaluation Results (Sample Data):")
+        print(f"Average IoU:  {total_iou / eval_count:.4f}")
+        print(f"Average Dice: {total_dice / eval_count:.4f}")
+        print("="*60)
+    
+    print(f"✅ All predictions saved to: {args.output_dir}")
 
 if __name__ == '__main__':
     main()
