@@ -29,7 +29,8 @@ To strictly comply with the double-blind review policy and protect core intellec
 We provide a streamlined environment setup for the inference demo.
 
 ```bash
-conda create -n SD-UNet python=3.10
+conda create -n SD-UNet python=3.10 -y
 conda activate SD-UNet
 # Install core dependencies
-pip install torch torchvision numpy opencv-python tqdm
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+pip install timm triton opencv-python numpy pillow tifffile tqdm
